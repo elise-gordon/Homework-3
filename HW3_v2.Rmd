@@ -1,0 +1,214 @@
+---
+title: "Homework 3"
+author: "Elise Gordon"
+date: "11/29/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Clean the Data
+
+```{r}
+# Read the data
+churn <- read.csv("TelcoChurn.csv")
+str(churn)
+
+# Remove Customer ID column
+churn$customerID <- NULL
+
+str(churn)
+
+# Turn variables into Dummy Variables
+churnDummy <- as.data.frame(model.matrix(~.-1,churn))
+str(churnDummy)
+
+# Normalize Data
+normalize <- function(x) {
+  return ((x - min(x)) / (max(x) - min(x)))
+}
+
+# we are going to normalize everything 
+churn_norm <- as.data.frame(lapply(churnDummy, normalize))
+
+summary(churn_norm) #everything is between 0 and 1 now
+
+# Randomize the rows in the data (shuffling the rows)
+set.seed(12345)
+churn_random <- churn_norm[sample(nrow(churn_norm)),]
+
+str(churn_random)
+
+```
+
+# Logistic Regression
+
+
+```{r}
+#note: we build the model using the randomized and normalized set
+simplemodel <- glm(ChurnYes ~ ., data = churn_random, family = binomial(link = "logit"))
+
+stepmodel <- step(simplemodel, direction = "backward")
+
+
+pred_step <- predict(stepmodel, churn_random, type = "response")
+summary(pred_step)
+
+pred_cat <- ifelse(pred_step >= 0.5, 1, 0)
+
+table(pred_cat)
+2678 / (4354 +  2678)
+table(churn_random$ChurnYes)
+1869 / (5163 + 1869)
+
+
+## Evaluate the model
+
+library(caret)
+confusionMatrix(factor(pred_cat), factor(churn_random$ChurnYes), positive = "1")
+
+```
+
+
+# SVM
+
+```{r}
+
+library(kernlab)
+churn_classifier <- ksvm(as.factor(ChurnYes) ~ ., data = churn_random,
+                          kernel = "rbfdot")
+
+churn_classifier
+
+summary(churn_classifier)
+
+churn_predictions <- predict(churn_classifier, churn_random)
+summary(churn_predictions)
+
+confusionMatrix(churn_predictions, as.factor(churn_random$ChurnYes), positive = "1")
+
+```
+
+# KNN
+
+```{r}
+
+library(class)
+library(caret)
+library(e1071)
+churnknn <- churn_random[-32]
+churn_test_pred <- knn(train = churnknn, test = churnknn,
+                      cl = churn_random$ChurnYes, k=80)
+library(gmodels)
+CrossTable(x = churn_random$ChurnYes, y = churn_test_pred, 
+           prop.chisq=FALSE)
+
+confusionMatrix(churn_test_pred, as.factor(churn_random$ChurnYes), positive = "1")
+```
+
+# ANN
+
+```{r}
+
+# train the neuralnet model
+library(neuralnet)
+
+str(churn_random)
+
+# simple ANN with only a single hidden neuron
+churn_model <- neuralnet(formula = ChurnYes ~ .,
+                              data = churn_random, hidden = 2)
+
+
+# visualize the network topology
+plot(churn_model)
+
+## Evaluating model performance
+# obtain model results
+model_results <- compute(churn_model, churn_random[1:31])
+str(model_results)
+
+# obtain predicted strength values
+predicted_churn <- model_results$net.result
+
+summary(predicted_churn)
+
+# examine the correlation between predicted and actual values
+cor(predicted_churn, churn_random$ChurnYes)
+
+# Set a threshold of .5
+
+pred_nn <- ifelse(predicted_churn >= 0.5, 1, 0)
+
+## Evaluate the model
+
+library(caret)
+confusionMatrix(factor(pred_nn), factor(churn_random$ChurnYes), positive = "1")
+
+
+```
+
+
+
+
+## Decision Tree
+
+```{r}
+
+
+library(C50)
+
+churn_dt_model <- C5.0(churn_random[-32],as.factor(churn_random$ChurnYes))
+summary(churn_dt_model)
+
+plot(churn_dt_model)
+churn_dt_predict<-predict(churn_dt_model,churn_random)
+
+str(churn_dt_predict)
+
+library(caret)
+confusionMatrix(as.factor(churn_dt_predict),as.factor(churn_random$ChurnYes),positive="1")
+
+
+
+```
+## Combine all the models and use Decision Tree on top
+
+```{r}
+
+## Make a data frame of all the predictions
+
+churn_master <- data.frame(pred_cat, as.numeric(churn_predictions), as.numeric(churn_test_pred), pred_nn, as.numeric(churn_dt_predict), churn_random$ChurnYes)
+
+str(churn_master)
+
+## Divide in test and train
+churn_master_train <- churn_master[1:5600,]
+churn_master_test <- churn_master[5601:7032,]
+
+## Run decision tree on top 
+str(churn_master_train)
+
+library(C50)
+
+## Training
+churn_master_dt_model <- C5.0(churn_master_train[-6],as.factor(churn_master_train$churn_random.ChurnYes))
+
+summary(churn_master_dt_model)
+plot(churn_master_dt_model)
+
+
+## Testing
+churn_master_predict <- predict(churn_master_dt_model,churn_master_test)
+
+str(churn_master_predict)
+
+library(caret)
+confusionMatrix(as.factor(churn_master_predict),as.factor(churn_master_test$churn_random.ChurnYes),positive="1")
+
+
+```
+
+The KNN, logistic regression, ANN, and SVM models only produced accuracy of about 80% accuracy with kappa values no higher than .48, even after taking steps to improve each individual prediction model. With the stacked model, we were able to improve accuracy to 82% and kappa to .49.
